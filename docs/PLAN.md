@@ -28,7 +28,7 @@ def generate_team_insight(
 | Prompt with only aggregated metrics | `team_insight.py` → `build_prompt` |
 | LLM response validation | `team_insight.py` → `parse_insight` |
 | Bounded retry for transient LLM failures | `team_insight.py` → `request_insight` |
-| At least three focused tests | `tests/test_team_insight.py` (more than three, listed below) |
+| At least three focused tests | `tests/` (more than three, listed below) |
 | Production notes (FastAPI / Lambda) | `README.md` section, outline below |
 
 ## Constraints
@@ -202,14 +202,15 @@ Invalid input fails before the LLM is ever called.
 ## Files
 
 Everything lives in one module, split into sections (errors, types, input
-validation, metrics, LLM, entry point, example run).
+validation, metrics, LLM, entry point).
 
 ```
-src/app/team_insight.py      # the whole service + FakeLLMClient example under __main__
+src/app/team_insight.py      # the whole service
+tests/fakes.py               # FakeLLMClient, ScriptedLLMClient, example data
+tests/test_example.py        # reference example with FakeLLMClient
 tests/test_team_insight.py   # pytest unit + end-to-end tests
+tests/test_edge_cases.py     # niche scenarios
 ```
-
-Run the example: `PYTHONPATH=src python -m app.team_insight`.
 
 ## Tests
 

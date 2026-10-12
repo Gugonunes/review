@@ -15,34 +15,7 @@ from app.team_insight import (
     parse_events,
     parse_insight,
 )
-
-VALID_REPLY = '{"summary": "Healthy delivery flow.", "recommendations": ["Monitor cycle time."]}'
-
-EXAMPLE_EVENTS = [
-    {"type": "pr_opened", "id": "pr-1", "timestamp": "2026-01-01T09:00:00Z"},
-    {"type": "pr_merged", "id": "pr-1", "timestamp": "2026-01-02T09:00:00Z"},
-    {"type": "deployment", "timestamp": "2026-01-03T12:00:00Z"},
-    {"type": "incident", "timestamp": "2026-01-04T12:00:00Z"},
-]
-
-
-class ScriptedLLMClient:
-    """Returns (or raises) each scripted reply in order and records prompts."""
-
-    def __init__(self, *replies: str | Exception):
-        self.replies = list(replies)
-        self.prompts: list[str] = []
-
-    @property
-    def calls(self) -> int:
-        return len(self.prompts)
-
-    def complete(self, prompt: str, timeout_seconds: float) -> str:
-        self.prompts.append(prompt)
-        reply = self.replies.pop(0)
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
+from fakes import EXAMPLE_EVENTS, VALID_REPLY, ScriptedLLMClient
 
 
 # --- Input validation -------------------------------------------------------

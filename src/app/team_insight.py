@@ -24,7 +24,8 @@ MAX_RETRIES = 1
 
 # Strict "YYYY-MM-DDTHH:MM:SS[.ffffff]Z". Checked before parsing so the accepted
 # format is the same on every Python version (fromisoformat grew more lenient in 3.11).
-TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z")
+# re.ASCII: without it \d also matches non-ASCII digits such as full-width "２".
+TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z", re.ASCII)
 
 # Optional ```json ... ``` fence that models often wrap JSON replies in.
 CODE_FENCE_PATTERN = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
@@ -314,60 +315,3 @@ def generate_team_insight(
         (time.monotonic() - started) * 1000,
     )
     return {"team_id": team_id, "metrics": metrics.to_dict(), "insight": insight}
-
-
-# --- Example run with a fake client -----------------------------------------
-
-
-class FakeLLMClient:
-    """Test double: returns a canned response and counts calls."""
-
-    def __init__(self, response: str):
-        self.response = response
-        self.calls = 0
-
-    def complete(self, prompt: str, timeout_seconds: float) -> str:
-        self.calls += 1
-        assert "pr-1" not in prompt
-        return self.response
-
-
-if __name__ == "__main__":
-    client = FakeLLMClient(
-        '{"summary": "Healthy delivery flow.", '
-        '"recommendations": ["Monitor cycle time."]}'
-    )
-
-    result = generate_team_insight(
-        "platform",
-        [
-            {
-                "type": "pr_opened",
-                "id": "pr-1",
-                "timestamp": "2026-01-01T09:00:00Z",
-            },
-            {
-                "type": "pr_merged",
-                "id": "pr-1",
-                "timestamp": "2026-01-02T09:00:00Z",
-            },
-            {
-                "type": "deployment",
-                "timestamp": "2026-01-03T12:00:00Z",
-            },
-            {
-                "type": "incident",
-                "timestamp": "2026-01-04T12:00:00Z",
-            },
-        ],
-        client,
-    )
-
-    assert result["metrics"]["merged_prs"] == 1
-    assert result["metrics"]["average_pr_cycle_time_hours"] == 24.0
-    assert result["metrics"]["deployments"] == 1
-    assert result["metrics"]["incidents"] == 1
-    assert result["insight"]["summary"] == "Healthy delivery flow."
-    assert client.calls == 1
-
-    print(json.dumps(result, indent=2))
