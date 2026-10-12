@@ -1,0 +1,12 @@
+{
+  "name": "team-insight",
+  "private": true,
+  "scripts": {
+    "dev": "sst dev",
+    "deploy": "sst deploy",
+    "remove": "sst remove"
+  },
+  "devDependencies": {
+    "sst": "4.17.1"
+  }
+}

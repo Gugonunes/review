@@ -1,0 +1,14 @@
+[project]
+name = "functions"
+version = "0.1.0"
+description = "AWS Lambda handlers for the team insight service."
+# Match the Lambda runtime in sst.config.ts so `sst dev` and `sst deploy` behave the same.
+requires-python = "==3.12.*"
+dependencies = ["app"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+app = { workspace = true }
