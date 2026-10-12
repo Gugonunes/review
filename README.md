@@ -56,11 +56,79 @@ result = generate_team_insight(
 }
 ```
 
-Run the bundled example with a fake client:
+The same example runs as a test with a fake client:
 
 ```bash
-PYTHONPATH=src python -m app.team_insight
+pytest tests/test_example.py
 ```
+
+## Architecture
+
+```mermaid
+flowchart LR
+    events["pr_opened<br/>pr_merged<br/>deployment<br/>incident"]
+    gateway["API Gateway<br/>throttling for big teams"]
+    response["JSON response<br/>200 / 4xx / 5xx"]
+
+    subgraph core["Deterministic core"]
+        direction LR
+        validate["Validate inputs<br/>parse_events"]
+        metrics["Calculate metrics<br/>calculate_metrics"]
+        cache[("Cache<br/>Redis / ElastiCache<br/>key: team_id + metrics")]
+        validate --> metrics --> cache
+    end
+
+    subgraph llm_layer["LLM layer"]
+        direction LR
+        prompt["Build prompt<br/>aggregated metrics only"]
+        llm["LLM call<br/>1 retry on transient<br/>or invalid reply"]
+        output["Output validation<br/>parse_insight"]
+        fallback["Fallback model"]
+        review["Human-in-the-loop<br/>review for unusual metrics"]
+        prompt --> llm --> output
+        llm -. "both attempts fail" .-> fallback
+        llm -. "flagged" .-> review
+    end
+
+    logs[("Logs<br/>CloudWatch")]
+    cicd["Git CI/CD<br/>pytest + sst deploy"]
+
+    events --> gateway --> validate
+    cache -- "miss" --> prompt
+    cache -- "hit" --> response
+    output --> response
+    output -. "store" .-> cache
+    llm -. "attempts, errors" .-> logs
+    output -. "metrics, duration" .-> logs
+    cicd -. "deploys" .-> core
+    cicd -. "deploys" .-> llm_layer
+
+    classDef planned stroke:#e5534b,stroke-width:2px,stroke-dasharray:5 5
+    class gateway,cache,fallback,review,cicd planned
+```
+
+Solid boxes exist in this repo; dashed red boxes are planned. Each stage only
+receives the output of the previous one, so raw events never get past the
+deterministic core.
+
+| Component | Where | Status |
+| --- | --- | --- |
+| Validate inputs | `parse_events` in `src/app/team_insight.py` | Implemented |
+| Calculate metrics | `calculate_metrics` | Implemented |
+| Build prompt (aggregates only) | `build_prompt` | Implemented |
+| LLM call with one retry | `request_insight` | Implemented, provider not wired (`create_llm_client`) |
+| Output validation | `parse_insight` | Implemented |
+| Logs | `logging` in the module; CloudWatch receives Lambda logs automatically | Implemented |
+| HTTP entry point | `functions/src/functions/api.py` + `sst.config.ts` | Configured, not deployed |
+| Throttling for big teams | API Gateway route throttling, or a queue (SQS) for very large event sets | Planned |
+| Cache | Redis / ElastiCache, keyed by `hash(team_id + metrics)` | Planned |
+| Fallback model | Second, cheaper or different provider after the retry is exhausted | Planned |
+| Human-in-the-loop review | Queue insights for review when metrics look unusual (e.g. incident spike) | Planned |
+| Git CI/CD | Run `pytest` on every PR, `sst deploy --stage production` on merge to `main` | Planned |
+
+The cache sits after metric calculation rather than after validation: metrics
+are deterministic, so two requests with different raw events but identical
+metrics produce the same prompt and can share one LLM answer.
 
 ## How it works
 
@@ -135,6 +203,9 @@ passed to the client **per attempt**, so the worst case is about 2 × timeout.
 - Read the provider API key from Secrets Manager or an environment variable;
   never log it.
 
+This is implemented in `functions/src/functions/api.py` and deployed with SST
+(see [Deploying to AWS with SST](#deploying-to-aws-with-sst)).
+
 ### Timeouts
 
 Per-attempt timeout in the client, overall budget = attempts × timeout. With
@@ -179,10 +250,66 @@ keyed by `(team_id, generated_at)`. Useful for history, trends and audit.
 - On provider throttling (HTTP 429), the client should raise
   `TransientLLMError` so the single retry applies.
 
+## Deploying to AWS with SST
+
+The repo is set up for [SST](https://sst.dev) (v4) but has not been deployed.
+`sst.config.ts` defines an API Gateway HTTP API with one route backed by a
+Python 3.12 Lambda:
+
+```
+POST /teams/{team_id}/insights
+{"events": [...]}
+```
+
+| Status | When |
+| --- | --- |
+| 200 | Insight generated (same body as `generate_team_insight`) |
+| 400 | Body is not a JSON object, or `InvalidEventError` |
+| 413 | More than 10,000 events |
+| 501 | No LLM provider wired yet (current state) |
+| 502 | `InvalidLLMResponseError` |
+| 503 | `LLMUnavailableError` |
+| 500 | Anything else (details only in the logs) |
+
+The Lambda timeout is 25s: two LLM attempts of `LLM_TIMEOUT_SECONDS` (10s)
+plus overhead, under API Gateway's 29s limit.
+
+### Before the first deploy
+
+1. Implement `create_llm_client()` in `functions/src/functions/api.py` for the
+   chosen provider. Map timeouts, throttling and 5xx responses to
+   `TransientLLMError`.
+2. Uncomment the `LlmApiKey` secret and `LLM_API_KEY` environment variable in
+   `sst.config.ts`.
+3. Add authentication to the route (e.g. an IAM or JWT authorizer).
+
+### Commands
+
+Requires Node.js, [uv](https://docs.astral.sh/uv/) and AWS credentials.
+
+```bash
+npm install
+uv sync --all-packages                              # SST packages the Lambda with uv
+npx sst secret set LlmApiKey <value> --stage dev    # once the secret is enabled
+npx sst dev                                         # live Lambda against a dev stage
+npx sst deploy --stage production
+npx sst remove --stage dev
+```
+
+SST's Python support is community-maintained. The handler is a uv workspace
+member (`functions/`) that depends on the `app` package at the repo root, so
+only the standard library ships in the Lambda bundle.
+
 ## Project layout
 
 ```
 src/app/team_insight.py      # the service
-tests/test_team_insight.py   # unit and end-to-end tests
+functions/src/functions/api.py  # Lambda handler (HTTP request -> service -> HTTP response)
+sst.config.ts                # SST infrastructure (API Gateway + Lambda)
+tests/fakes.py               # shared test data and fake LLM clients
+tests/test_lambda_handler.py # Lambda handler status codes and request parsing
+tests/test_example.py        # reference example from the task statement
+tests/test_team_insight.py   # unit and end-to-end tests per stage
+tests/test_edge_cases.py     # niche scenarios (timestamps, rounding, retries, injection)
 docs/PLAN.md                 # original plan
 ```

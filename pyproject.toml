@@ -16,7 +16,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# uv workspace used by SST to package the Lambda in functions/ together with this package.
+[tool.uv.workspace]
+members = ["functions"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "functions/src"]
 addopts = "-q"

@@ -16,6 +16,10 @@ venv/
 .coverage
 htmlcov/
 
+# SST / Node
+.sst/
+node_modules/
+
 # Environment files
 .env
 
